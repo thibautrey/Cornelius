@@ -27,6 +27,18 @@ test('un jeton de module se saisit dans Mise en route, compte aussitôt et s’e
   await expect(
     card.getByRole('heading', { name: 'Configuration du fournisseur personnalisé' }),
   ).toBeVisible();
+  await expect(
+    modules
+      .getByRole('heading', { name: 'Jeton Météo Concept' })
+      .locator('xpath=ancestor::article')
+      .locator('img'),
+  ).toHaveAttribute('src', '/providers/meteo-concept.png');
+  await expect(
+    modules
+      .getByRole('heading', { name: 'Jeton PRIM d’Île-de-France Mobilités' })
+      .locator('xpath=ancestor::article')
+      .locator('img'),
+  ).toHaveAttribute('src', '/providers/idfm.svg');
   const field = modules.getByLabel('Jeton Météo Concept', { exact: true });
   await field.fill('meteo-e2e-token-0123456789wxyz');
   try {

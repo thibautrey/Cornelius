@@ -1,14 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import {
-  Boxes,
-  CloudSun,
-  ExternalLink,
-  KeyRound,
-  Sparkles,
-  Server,
-  TrainFront,
-  type LucideIcon,
-} from 'lucide-react';
+import { Boxes, ExternalLink, KeyRound, Sparkles, Server, type LucideIcon } from 'lucide-react';
 import type { CustomProviderSettings, CustomProviderView } from '../../../shared/custom-provider';
 import type { SecretView } from '../../../shared/types';
 import { api } from '../../api';
@@ -52,9 +43,9 @@ function presentationOf(secret: SecretView): SecretPresentation {
     case 'CUSTOM_OPENAI_API_KEY':
       return { icon: Server, iconClassName: 'bg-primary/10 text-primary' };
     case 'CORNELIUS_PRIM_API_KEY':
-      return { icon: TrainFront, iconClassName: 'bg-violet-500/10 text-violet-500' };
+      return { logo: '/providers/idfm.svg', iconClassName: 'bg-white' };
     case 'CORNELIUS_METEO_CONCEPT_TOKEN':
-      return { icon: CloudSun, iconClassName: 'bg-sky-500/10 text-sky-500' };
+      return { logo: '/providers/meteo-concept.png', iconClassName: 'bg-white' };
     default:
       return { icon: KeyRound, iconClassName: 'bg-primary/10 text-primary' };
   }
