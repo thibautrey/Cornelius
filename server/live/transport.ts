@@ -90,6 +90,8 @@ export interface ImageGenerationToolBridge {
 
 interface ActiveSession {
   scope: Scope;
+  gateway: LiveGateway | null;
+  browserOutput?: (pcm: Buffer | null | 'ready') => void;
   abort: AbortController;
   blocked: boolean;
   response?: Promise<LiveCreateResponse>;
@@ -274,12 +276,12 @@ export class LiveTransport implements SessionTransport {
       active.connection?.dispose();
       active.connection = undefined;
     }
-    this.controller.close('Connexions OpenAI bloquées.');
+    this.controller.close('Connexions IA bloquées.');
   }
   unavailableReason() {
-    if (this.isBlocked()) return 'Connexions OpenAI bloquées dans l’administration.';
+    if (this.isBlocked()) return 'Connexions IA bloquées dans l’administration.';
     if (!this.gateway)
-      return 'Ajoutez la clé OpenAI dans l’administration (Mise en route, Clés et jetons).';
+      return 'Ajoutez la clé du fournisseur vocal choisi dans Mise en route → Clés et jetons.';
     return null;
   }
   /** Nouvelle clé OpenAI (ou plus de clé) : prise en compte dès la prochaine conversation. */
@@ -297,7 +299,7 @@ export class LiveTransport implements SessionTransport {
     void this.gateway.prewarm().catch(() => {});
   }
   open(scope: Scope) {
-    if (this.isBlocked()) throw new Error('Connexions OpenAI bloquées.');
+    if (this.isBlocked()) throw new Error('Connexions IA bloquées.');
     // The controller can release its close watchdog just before this transport's timer.
     // A newly admitted scope authorizes disposal of only the previous closing session.
     if (
@@ -310,6 +312,7 @@ export class LiveTransport implements SessionTransport {
     const satellite = this.controller.sessionState().satellite ?? null;
     this.active = {
       scope: { ...scope },
+      gateway: this.gateway,
       abort: new AbortController(),
       satelliteId: satellite?.id ?? null,
       echoUntil: 0,
@@ -353,15 +356,44 @@ export class LiveTransport implements SessionTransport {
    * Conversation d’un satellite : pas de navigateur pour négocier WebRTC, le serveur ouvre
    * lui-même la session Live sur un WebSocket principal, en voix seule et sans identité.
    */
+  browserAudio(scope: Scope, output: (pcm: Buffer | null | 'ready') => void) {
+    const active = this.require(scope);
+    if (!active.gateway?.serverAudio || active.satelliteId || active.browserOutput)
+      throw new Error('Transport vocal indisponible ou déjà connecté.');
+    active.browserOutput = output;
+    this.connectSatellite(active);
+    return {
+      send: (pcm: Buffer) => {
+        if (
+          this.active === active &&
+          !active.finalized &&
+          !active.closing &&
+          !active.blocked &&
+          active.attached
+        )
+          active.audio?.sendAudio(pcm);
+      },
+      close: () => {
+        if (this.active === active && !active.finalized) {
+          this.controller.close('Connexion audio navigateur fermée.');
+          this.controller.publish();
+        }
+      },
+    };
+  }
   private connectSatellite(active: ActiveSession) {
-    const gateway = this.gateway;
+    const gateway = active.gateway;
     if (!gateway?.connect) {
-      queueMicrotask(() => this.controller.close('Clé OpenAI absente.'));
+      queueMicrotask(() => this.controller.close('Clé du fournisseur vocal absente.'));
       return;
     }
     // Profil rattaché au satellite (choisi dans l’administration), ou conversation anonyme.
     const profileId = this.controller.snapshot().state.activeProfile?.id ?? null;
-    const { client: _client, audio, ...config } = this.configuration(profileId, true);
+    const {
+      client: _client,
+      audio,
+      ...config
+    } = this.configuration(profileId, !!active.satelliteId);
     active.toolsProfileId = profileId;
     // Mémoire personnelle seulement au nom d’un profil : une conversation anonyme ne laisse rien.
     if (profileId) this.memory?.open(active.scope);
@@ -378,6 +410,7 @@ export class LiveTransport implements SessionTransport {
           if (event.type === 'session.started' && !active.attached) {
             active.attached = true;
             active.mediaConnected = true;
+            active.browserOutput?.('ready');
             active.remoteId = event.session.id ?? undefined;
             if (active.closing) this.send(active, { type: 'session.close' });
             else this.controller.controlAttached(active.scope);
@@ -393,6 +426,12 @@ export class LiveTransport implements SessionTransport {
           }
         },
       },
+      !active.satelliteId &&
+        this.controller.sessionState().mode !== 4 &&
+        this.controller.greetingMode() !== 'off' &&
+        this.controller.snapshot().state.activeProfile?.name
+        ? 'Bonjour ' + this.controller.snapshot().state.activeProfile!.name + '.'
+        : undefined,
     );
     active.connection = connection;
     active.audio = connection;
@@ -515,14 +554,15 @@ export class LiveTransport implements SessionTransport {
     });
   }
   offer(scope: Scope, sdp: string): Promise<LiveCreateResponse> {
-    if (this.isBlocked()) throw new Error('Connexions OpenAI bloquées.');
+    if (this.isBlocked()) throw new Error('Connexions IA bloquées.');
     const active = this.require(scope);
     // Le satellite porte déjà le son de sa conversation : aucune offre WebRTC n’y a sa place.
     if (active.satelliteId) throw new Error('Conversation tenue par un satellite.');
     // Une clé changée pendant la création ne mélange pas deux comptes : cette session garde la
     // passerelle qui l’a créée.
-    const gateway = this.gateway;
-    if (!gateway) throw new Error('Clé OpenAI absente.');
+    const gateway = active.gateway;
+    if (gateway?.serverAudio) throw new Error('Transport PCM attendu.');
+    if (!gateway) throw new Error('Clé du fournisseur vocal absente.');
     if (active.offer && active.offer !== sdp) throw new Error('Une offre média existe déjà.');
     if (active.response) return active.response;
     this.logs?.write('info', 'openai', 'Offre média reçue', { interactionId: scope.interactionId });
@@ -545,7 +585,7 @@ export class LiveTransport implements SessionTransport {
           }
           throw new Error('Session média périmée.');
         }
-        if (active.blocked || this.isBlocked()) throw new Error('Connexions OpenAI bloquées.');
+        if (active.blocked || this.isBlocked()) throw new Error('Connexions IA bloquées.');
         active.connection = gateway.attach(result.session.id, {
           open: () => {
             if (this.disposed || active.finalized || this.active !== active) return;
@@ -870,6 +910,23 @@ export class LiveTransport implements SessionTransport {
           : {}),
       });
     }
+    const internal = object(event);
+    if (internal.type === 'voice.interrupted') active.browserOutput?.(null);
+    if (internal.type === 'voice.turn_completed')
+      this.controller.setAssistantBusy(active.scope, false);
+    if (internal.type === 'voice.state') {
+      const phase = internal.state;
+      if (phase === 'listening' || phase === 'thinking' || phase === 'speaking' || phase === 'idle')
+        this.controller.setVoiceActivity(active.scope, phase, 1200);
+      this.controller.setAssistantBusy(active.scope, phase === 'thinking');
+    }
+    if (
+      active.browserOutput &&
+      internal.type === 'session.output_audio.delta' &&
+      typeof internal.delta === 'string' &&
+      internal.delta.length <= 262_144
+    )
+      active.browserOutput(Buffer.from(internal.delta, 'base64'));
     // Satellite : le flux de sortie (16 kHz, silences compris) part tel quel vers sa pièce.
     if (active.satelliteId && String(object(event).type ?? '') === 'session.output_audio.delta') {
       const delta = object(event).delta;

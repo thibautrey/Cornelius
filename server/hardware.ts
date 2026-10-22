@@ -164,6 +164,21 @@ export function registerHardware(
     required: ['id'],
     properties: { id: { type: 'string', minLength: 1, maxLength: 1024 } },
   });
+  const cameraSource = compile<{ source: 'server' | 'browser' }>({
+    type: 'object',
+    additionalProperties: false,
+    required: ['source'],
+    properties: { source: { enum: ['server', 'browser'] } },
+  });
+  app.put('/api/admin/camera/source', { preHandler: authorize('admin') }, async (req, reply) => {
+    if (!cameraSource(req.body)) return reply.code(400).send({ error: 'Source caméra invalide.' });
+    try {
+      perception.setCameraSource(req.body.source);
+      return { ok: true };
+    } catch (error) {
+      return reply.code(409).send({ error: (error as Error).message });
+    }
+  });
   app.post('/api/admin/camera/refresh', { preHandler: authorize('admin') }, async (_req, reply) => {
     try {
       perception.camera.refresh();
@@ -296,6 +311,53 @@ export function registerHardware(
     },
     (socket) => perception.connect(socket),
   );
+  app.get<{
+    Querystring: { interactionId?: string; profileEpoch?: string; contextVersion?: string };
+  }>('/voice-audio', { websocket: true, preValidation: kiosk }, (socket, req) => {
+    if (!live) return socket.close(1008, 'Voix indisponible.');
+    const scope = {
+      interactionId: req.query.interactionId ?? null,
+      profileEpoch: Number(req.query.profileEpoch),
+      contextVersion: Number(req.query.contextVersion),
+    };
+    if (
+      !scope.interactionId ||
+      !Number.isSafeInteger(scope.profileEpoch) ||
+      !Number.isSafeInteger(scope.contextVersion)
+    )
+      return socket.close(1008, 'Session invalide.');
+    let connection: ReturnType<LiveTransport['browserAudio']>;
+    try {
+      connection = live.browserAudio(scope, (pcm) => {
+        if (socket.readyState !== 1) return;
+        if (socket.bufferedAmount > 256_000) return socket.close(1013, 'Lecture audio trop lente.');
+        socket.send(
+          pcm === 'ready'
+            ? JSON.stringify({ type: 'ready' })
+            : (pcm ?? JSON.stringify({ type: 'interrupted' })),
+        );
+      });
+    } catch {
+      return socket.close(1008, 'Session indisponible.');
+    }
+    socket.on('message', (data, binary) => {
+      if (
+        !binary ||
+        !services.currentKiosk(req) ||
+        !Object.entries(scope).every(
+          ([key, value]) => controller.scope()[key as keyof Scope] === value,
+        ) ||
+        !['connecting', 'ready'].includes(controller.sessionState().phase)
+      )
+        return socket.close(1008, 'Session média périmée.');
+      const pcm = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+      if (pcm.length !== 1024) return socket.close(1008, 'Trame audio invalide.');
+      connection.send(pcm);
+      perception.audio(scope.interactionId!, pcm);
+    });
+    socket.on('close', () => connection.close());
+    socket.on('error', () => socket.close());
+  });
   app.get('/wake-audio', { websocket: true, preValidation: kiosk }, (socket, req) => {
     if (!controller.isWakeListening())
       return socket.close(1008, 'Écoute du mot d’appel indisponible.');

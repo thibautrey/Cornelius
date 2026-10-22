@@ -1,3 +1,4 @@
+import type { VoiceProvider } from './voice-provider.js';
 import type { CameraMode } from './camera.js';
 import type { CardSettings } from './cards.js';
 import type { PresenceTimings } from './presence-timings.js';
@@ -73,7 +74,7 @@ export interface ImageCard {
   title: string;
   prompt: string;
   imageUrl: string;
-  model: ImageGenerationModel | OpenAIImageModel;
+  model: ImageGenerationModel | OpenAIImageModel | string;
   width: number;
   height: number;
   primaryValue: null;
@@ -104,6 +105,8 @@ export interface VoiceActivity {
 export interface MirrorSetup {
   /** OPENAI_API_KEY est renseignée dans .env (sa valeur n’est jamais diffusée). */
   openaiKey: boolean;
+  mistralKey?: boolean;
+  voiceKey?: boolean;
   /** Le service caméra (perception) est connecté au serveur. */
   perception: boolean;
 }
@@ -117,6 +120,7 @@ export interface MirrorState {
   orbScale?: number;
   /** Voix de Cornelius (GPT-Live) ; absente des anciens serveurs. */
   speechVoice?: string;
+  voiceProvider?: VoiceProvider;
   /** Module « Cartes » ; absent des anciens serveurs (3 cartes, raccourcies, 60 s). */
   cardSettings?: CardSettings;
   /** Absent des anciens serveurs : aucun son. */
@@ -167,6 +171,7 @@ export interface HeartbeatEvent {
   sentAt: number;
 }
 export interface CameraStatus {
+  source?: import('./camera.js').CameraSource;
   devices: { id: string; label: string }[];
   selectedId: string | null;
   changing: boolean;
@@ -341,7 +346,7 @@ export const IMAGE_GENERATION_MODELS = [
 export type ImageGenerationModel = (typeof IMAGE_GENERATION_MODELS)[number];
 export const IMAGE_GENERATION_MODEL_DEFAULT: ImageGenerationModel = 'flux2-klein-4b';
 /** Où les images sont créées : sur ce PC, ou par l’API d’images d’OpenAI avec la même clé. */
-export const IMAGE_GENERATION_PROVIDERS = ['local', 'openai'] as const;
+export const IMAGE_GENERATION_PROVIDERS = ['local', 'openai', 'custom'] as const;
 export type ImageGenerationProvider = (typeof IMAGE_GENERATION_PROVIDERS)[number];
 export const OPENAI_IMAGE_MODELS = [
   'gpt-image-2.5-flare',
@@ -361,6 +366,7 @@ export interface ImageGenerationStatus {
   enabled: boolean;
   provider: ImageGenerationProvider;
   openaiModel: OpenAIImageModel;
+  customImageModel?: string;
   openaiQuality: OpenAIImageQuality;
   /** Raison pour laquelle OpenAI ne peut pas créer d’image (clé absente, connexions bloquées). */
   openaiUnavailable: string | null;
@@ -388,7 +394,8 @@ export interface DevicesEvent {
   status: DevicesStatus;
 }
 
-export type ServerEvent = StateEvent | HeartbeatEvent | DevicesEvent;
+export type ServerEvent =
+  StateEvent | HeartbeatEvent | DevicesEvent | import('./camera.js').BrowserCameraConfig;
 
 export type MirrorCommand =
   | { type: 'start' }

@@ -23,6 +23,8 @@ export interface LiveHandlers {
   failure(): void;
 }
 export interface LiveGateway {
+  provider?: 'openai' | 'mistral' | 'custom';
+  serverAudio?: boolean;
   hangup?(id: string): Promise<void>;
   /** Ouvre la connexion HTTPS que réutilisera la création de session, sans rien créer. */
   prewarm?(): Promise<void>;
@@ -33,10 +35,20 @@ export interface LiveGateway {
   ): Promise<LiveCreateResponse>;
   attach(id: string, handlers: LiveHandlers): LiveConnection;
   /** Démarre une session sur un WebSocket principal ; `open` suit l’envoi de session.start. */
-  connect?(session: SessionConfig, handlers: LiveHandlers): LiveAudioConnection;
+  connect?(
+    session: SessionConfig,
+    handlers: LiveHandlers,
+    welcomeMessage?: string,
+  ): LiveAudioConnection;
 }
-export function createLiveGateway(apiKey: string, logs?: DiagnosticLog): LiveGateway {
-  const client = new OpenAI({ apiKey, timeout: 4000, maxRetries: 0 });
+export function createLiveGateway(
+  apiKey: string,
+  logs?: DiagnosticLog,
+  options: { baseURL?: string; model?: string; provider?: 'openai' | 'custom' } = {},
+): LiveGateway {
+  const baseURL = (options.baseURL ?? 'https://api.openai.com/v1').replace(/\/+$/u, '');
+  const websocketBase = baseURL.replace(/^http/u, 'ws');
+  const client = new OpenAI({ apiKey, baseURL, timeout: 4000, maxRetries: 0 });
   /** WebSocket Live authentifié : canal de contrôle d’une session WebRTC, ou session complète. */
   function socketConnection(
     url: string,
@@ -83,17 +95,24 @@ export function createLiveGateway(apiKey: string, logs?: DiagnosticLog): LiveGat
     };
   }
   return {
+    provider: options.provider ?? 'openai',
     hangup: (id) => client.live.sessions.hangup(id),
     // Lecture gratuite : le handshake TLS est fait avant l’admission, pas pendant la création.
     prewarm: async () => {
-      await client.models.retrieve('gpt-live-1').catch(() => {});
+      await client.models.retrieve(options.model || 'gpt-live-1').catch(() => {});
     },
     create: (session, sdp, signal) =>
-      client.live.create({ session, transport: { type: 'webrtc', sdp } }, { signal }),
+      client.live.create(
+        {
+          session: { ...session, model: options.model || session.model },
+          transport: { type: 'webrtc', sdp },
+        },
+        { signal },
+      ),
     attach(id, handlers) {
       logs?.write('info', 'openai', 'Connexion du canal de contrôle', { remoteId: id });
       const { send, dispose } = socketConnection(
-        'wss://api.openai.com/v1/live/sessions/' + encodeURIComponent(id) + '/attach',
+        websocketBase + '/live/sessions/' + encodeURIComponent(id) + '/attach',
         id,
         () => {
           logs?.write('info', 'openai', 'Canal de contrôle connecté', { remoteId: id });
@@ -106,11 +125,16 @@ export function createLiveGateway(apiKey: string, logs?: DiagnosticLog): LiveGat
     connect(session, handlers) {
       logs?.write('info', 'openai', 'Connexion de la session Live du satellite');
       const { socket, send, dispose } = socketConnection(
-        'wss://api.openai.com/v1/live/sessions',
+        websocketBase + '/live/sessions',
         undefined,
         (opened) => {
           logs?.write('info', 'openai', 'Session Live du satellite connectée');
-          opened.send(JSON.stringify({ type: 'session.start', session }));
+          opened.send(
+            JSON.stringify({
+              type: 'session.start',
+              session: { ...session, model: options.model || session.model },
+            }),
+          );
           handlers.open();
         },
         handlers,

@@ -3,7 +3,7 @@ import type { OpenAIImageModel, OpenAIImageQuality } from '../shared/types.js';
 
 export interface OpenAIImageRequest {
   prompt: string;
-  model: OpenAIImageModel;
+  model: OpenAIImageModel | string;
   quality: OpenAIImageQuality;
   signal: AbortSignal;
 }
@@ -16,8 +16,9 @@ export const OPENAI_IMAGE_SIZE = 1024;
 export function createOpenAIImageCreator(
   apiKey: string,
   fetch?: typeof globalThis.fetch,
+  baseURL?: string,
 ): OpenAIImageCreator {
-  const client = new OpenAI({ apiKey, timeout: 170_000, maxRetries: 0, fetch });
+  const client = new OpenAI({ apiKey, baseURL, timeout: 170_000, maxRetries: 0, fetch });
   return async ({ prompt, model, quality, signal }) => {
     const response = await client.images.generate(
       {

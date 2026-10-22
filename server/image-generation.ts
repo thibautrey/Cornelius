@@ -32,7 +32,7 @@ export interface OpenAIImageSource {
   creator(): OpenAIImageCreator | null;
   blocked(): boolean;
 }
-type AnyImageModel = ImageGenerationModel | OpenAIImageModel;
+type AnyImageModel = ImageGenerationModel | OpenAIImageModel | string;
 
 interface GenerateInput {
   prompt: string;
@@ -123,6 +123,8 @@ export class ImageGeneration {
   private sanaSteps: 2 | 4;
   private provider: ImageGenerationProvider;
   private openaiModel: OpenAIImageModel;
+  private custom: OpenAIImageSource | null = null;
+  private customModel = '';
   private openaiQuality: OpenAIImageQuality;
   private openai: OpenAIImageSource | null = null;
   private loadedModel: ImageGenerationModel | null = null;
@@ -156,7 +158,8 @@ export class ImageGeneration {
         'SELECT provider, openai_model, openai_quality FROM image_generation_provider WHERE id = 1',
       )
       .get();
-    this.provider = remote?.provider === 'openai' ? 'openai' : 'local';
+    this.provider =
+      remote?.provider === 'openai' || remote?.provider === 'custom' ? remote.provider : 'local';
     const openaiModel = String(remote?.openai_model ?? '');
     this.openaiModel = isOpenAIModel(openaiModel) ? openaiModel : OPENAI_IMAGE_MODEL_DEFAULT;
     const quality = String(remote?.openai_quality ?? '');
@@ -213,7 +216,8 @@ export class ImageGeneration {
       provider: this.provider,
       openaiModel: this.openaiModel,
       openaiQuality: this.openaiQuality,
-      openaiUnavailable: this.openaiUnavailable(),
+      openaiUnavailable: this.provider === 'local' ? null : this.remoteUnavailable(),
+      customImageModel: this.customModel,
       preload: this.preload,
       storedImages: this.stored.filter((image) => !image.automatic).length,
       illustrateCards: this.illustrateCards,
@@ -292,6 +296,11 @@ export class ImageGeneration {
     this.openai = source;
   }
 
+  useCustom(source: OpenAIImageSource, model: string) {
+    this.custom = source;
+    this.customModel = model;
+  }
+
   setProvider(provider: ImageGenerationProvider) {
     if (!IMAGE_GENERATION_PROVIDERS.includes(provider)) throw new Error('Moteur d’image inconnu.');
     if (this.pending) throw new Error('Attendez la fin de la génération en cours.');
@@ -300,7 +309,9 @@ export class ImageGeneration {
     this.detail =
       provider === 'openai'
         ? 'Images créées par OpenAI.'
-        : 'Le modèle sera chargé à la prochaine génération.';
+        : provider === 'custom'
+          ? 'Images créées par le fournisseur personnalisé.'
+          : 'Le modèle sera chargé à la prochaine génération.';
     this.configure();
     this.changed();
   }
@@ -325,17 +336,22 @@ export class ImageGeneration {
     this.changed();
   }
 
-  private openaiUnavailable(): string | null {
-    if (!this.openai) return 'OpenAI n’est pas relié à ce serveur.';
-    if (this.openai.blocked()) return 'Connexions OpenAI bloquées dans l’administration.';
-    if (!this.openai.creator()) return 'Clé OpenAI absente : renseignez-la dans Mise en route.';
+  private remoteUnavailable(): string | null {
+    const source = this.provider === 'custom' ? this.custom : this.openai;
+    if (!source) return 'Fournisseur d’image non relié à ce serveur.';
+    if (source.blocked()) return 'Connexions distantes bloquées dans l’administration.';
+    if (!source.creator())
+      return this.provider === 'openai'
+        ? 'Clé OpenAI absente : renseignez-la dans Mise en route.'
+        : 'Clé personnalisée absente : renseignez-la dans Mise en route.';
+    if (this.provider === 'custom' && !this.customModel) return 'Choisissez un modèle d’image.';
     return null;
   }
 
   /** Le moteur choisi peut-il créer une image maintenant ? */
   private ready(): boolean {
-    return this.provider === 'openai'
-      ? this.openaiUnavailable() === null
+    return this.provider === 'openai' || this.provider === 'custom'
+      ? this.remoteUnavailable() === null
       : this.configured && this.worker?.readyState === 1;
   }
 
@@ -378,8 +394,8 @@ export class ImageGeneration {
   ): Promise<ImageGenerationOutcome> {
     if (!this.enabled) return failure('La génération d’image est désactivée.', 'forbidden');
     if (!validateInput(args)) return failure('Description d’image invalide.', 'invalid_params');
-    if (this.provider === 'openai') {
-      const reason = this.openaiUnavailable();
+    if (this.provider === 'openai' || this.provider === 'custom') {
+      const reason = this.remoteUnavailable();
       if (reason) return failure(reason);
     } else {
       if (!this.configured) return failure('Générateur d’image non configuré sur ce serveur.');
@@ -406,7 +422,12 @@ export class ImageGeneration {
         id,
         output,
         input,
-        model: this.provider === 'openai' ? this.openaiModel : this.model,
+        model:
+          this.provider === 'openai'
+            ? this.openaiModel
+            : this.provider === 'custom'
+              ? this.customModel
+              : this.model,
         automatic,
         profileId,
         startedAt: this.now(),
@@ -419,7 +440,11 @@ export class ImageGeneration {
         startedAt: this.pending.startedAt,
       });
       signal.addEventListener('abort', abortListener, { once: true });
-      if (this.provider === 'openai') this.remote(this.pending, this.openai!.creator()!);
+      if (this.provider === 'openai' || this.provider === 'custom')
+        this.remote(
+          this.pending,
+          (this.provider === 'custom' ? this.custom : this.openai)!.creator()!,
+        );
       else
         this.send({
           type: 'generate',
@@ -433,7 +458,11 @@ export class ImageGeneration {
           output,
         });
       this.detail =
-        this.provider === 'openai' ? 'Création par OpenAI en cours…' : 'Génération en cours…';
+        this.provider === 'openai'
+          ? 'Création par OpenAI en cours…'
+          : this.provider === 'custom'
+            ? 'Création par le fournisseur personnalisé en cours…'
+            : 'Génération en cours…';
       this.changed();
     });
     try {

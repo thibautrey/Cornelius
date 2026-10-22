@@ -1,14 +1,15 @@
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import {
-  AudioWaveform,
   Boxes,
   CloudSun,
   ExternalLink,
   KeyRound,
   Sparkles,
+  Server,
   TrainFront,
   type LucideIcon,
 } from 'lucide-react';
+import type { CustomProviderSettings, CustomProviderView } from '../../../shared/custom-provider';
 import type { SecretView } from '../../../shared/types';
 import { api } from '../../api';
 import type { RunAction } from './types';
@@ -17,6 +18,7 @@ import { useAdminResource } from './useAdminResource';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
+import { NativeSelect, NativeSelectOption } from '../ui/native-select';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../ui/card';
 
 function hostOf(url: string): string {
@@ -34,18 +36,21 @@ function status(secret: SecretView): string {
 }
 
 interface SecretPresentation {
-  icon: LucideIcon;
+  icon?: LucideIcon;
+  logo?: string;
   iconClassName: string;
 }
 
-const providerEnvs = new Set(['OPENAI_API_KEY', 'MISTRAL_API_KEY']);
+const providerEnvs = new Set(['OPENAI_API_KEY', 'MISTRAL_API_KEY', 'CUSTOM_OPENAI_API_KEY']);
 
 function presentationOf(secret: SecretView): SecretPresentation {
   switch (secret.env) {
     case 'OPENAI_API_KEY':
-      return { icon: Sparkles, iconClassName: 'bg-emerald-500/10 text-emerald-500' };
+      return { logo: '/providers/openai.svg', iconClassName: 'bg-white text-black' };
     case 'MISTRAL_API_KEY':
-      return { icon: AudioWaveform, iconClassName: 'bg-orange-500/10 text-orange-500' };
+      return { logo: '/providers/mistral.ico', iconClassName: 'bg-black' };
+    case 'CUSTOM_OPENAI_API_KEY':
+      return { icon: Server, iconClassName: 'bg-primary/10 text-primary' };
     case 'CORNELIUS_PRIM_API_KEY':
       return { icon: TrainFront, iconClassName: 'bg-violet-500/10 text-violet-500' };
     case 'CORNELIUS_METEO_CONCEPT_TOKEN':
@@ -179,13 +184,17 @@ function SecretCard({
   const presentation = presentationOf(secret);
   const Icon = presentation.icon;
   return (
-    <article className="flex min-w-0 flex-col gap-4 rounded-xl border bg-card/50 p-4 shadow-sm">
+    <article className="flex min-w-0 snap-start flex-col gap-4 rounded-xl border bg-card/50 p-4 shadow-sm [flex:0_0_min(28rem,calc(100vw-5rem))]">
       <div className="flex min-w-0 items-start gap-3">
         <span
           className={`flex size-10 shrink-0 items-center justify-center rounded-xl ${presentation.iconClassName}`}
           aria-hidden="true"
         >
-          <Icon className="size-5" />
+          {presentation.logo ? (
+            <img src={presentation.logo} alt="" className="size-6 object-contain" />
+          ) : Icon ? (
+            <Icon className="size-5" />
+          ) : null}
         </span>
         <div className="min-w-0 flex-1">
           <h4 className="text-sm font-semibold leading-5">
@@ -240,11 +249,166 @@ function SecretGroup({
           <p className="text-xs text-muted-foreground">{description}</p>
         </div>
       </div>
-      <div className="grid gap-3 lg:grid-cols-2">
+      <div className="secret-card-scroll flex snap-x snap-mandatory gap-3 overflow-x-auto pb-3 [scrollbar-gutter:stable]">
         {secrets.map((secret) => (
           <SecretCard key={secret.env} secret={secret} run={run} onChanged={onChanged} />
         ))}
       </div>
+    </section>
+  );
+}
+
+function CustomProviderForm({ run }: { run: RunAction }) {
+  const [view, setView] = useState<CustomProviderView | null>(null);
+  const [form, setForm] = useState<CustomProviderSettings | null>(null);
+  useEffect(() => {
+    void api.customProvider().then((next) => {
+      setView(next);
+      setForm(next);
+    });
+  }, []);
+  if (!form || !view) return null;
+  const field = (key: keyof CustomProviderSettings, value: string) =>
+    setForm({ ...form, [key]: value });
+  const models = view.models;
+  return (
+    <section
+      className="space-y-4 rounded-xl border bg-muted/20 p-4"
+      aria-labelledby="custom-provider-settings"
+    >
+      <div>
+        <h3 id="custom-provider-settings" className="text-sm font-semibold">
+          Configuration du fournisseur personnalisé
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          API compatible OpenAI. La clé se renseigne dans la carte ci-dessus.
+        </p>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="space-y-1 text-sm">
+          <span>Nom affiché</span>
+          <Input value={form.name} onChange={(event) => field('name', event.target.value)} />
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>URL de base</span>
+          <Input
+            type="url"
+            placeholder="http://serveur:port/v1"
+            value={form.baseUrl}
+            onChange={(event) => field('baseUrl', event.target.value)}
+          />
+        </label>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={!view.keyConfigured || !form.baseUrl}
+          onClick={() =>
+            void run('Modèles compatibles détectés.', async () => {
+              const saved = await api.saveCustomProvider(form);
+              setView(saved);
+              const discovered = await api.discoverCustomProviderModels();
+              setView(discovered);
+              setForm(discovered);
+            })
+          }
+        >
+          Détecter les modèles
+        </Button>
+        <span className="self-center text-xs text-muted-foreground">
+          {models.length ? `${models.length} modèle(s) détecté(s)` : 'Aucun modèle détecté'}
+        </span>
+      </div>
+      <datalist id="custom-provider-models">
+        {models.map((model) => (
+          <option key={model} value={model} />
+        ))}
+      </datalist>
+      <div className="flex flex-wrap gap-2" aria-label="Capacités configurées">
+        <Badge variant={form.voiceModel ? 'secondary' : 'outline'}>
+          Voix {form.voiceModel ? 'configurée' : 'non configurée'}
+        </Badge>
+        <Badge variant={form.memoryModel ? 'secondary' : 'outline'}>
+          Mémoire {form.memoryModel ? 'configurée' : 'non configurée'}
+        </Badge>
+        <Badge variant={form.imageModel ? 'secondary' : 'outline'}>
+          Images {form.imageModel ? 'configurées' : 'non configurées'}
+        </Badge>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {(
+          [
+            ['voiceModel', 'Modèle voix Realtime'],
+            ['memoryModel', 'Modèle mémoire'],
+            ['imageModel', 'Modèle images'],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="space-y-1 text-sm">
+            <span>{label}</span>
+            <Input
+              list="custom-provider-models"
+              value={form[key]}
+              onChange={(event) => field(key, event.target.value)}
+            />
+          </label>
+        ))}
+      </div>
+      <div className="grid gap-4 md:grid-cols-3">
+        <label className="space-y-1 text-sm">
+          <span>Secours voix</span>
+          <NativeSelect
+            value={form.voiceFallback}
+            onChange={(event) => field('voiceFallback', event.target.value)}
+          >
+            <NativeSelectOption value="openai">OpenAI</NativeSelectOption>
+            <NativeSelectOption value="mistral">Mistral</NativeSelectOption>
+          </NativeSelect>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>Fournisseur mémoire</span>
+          <NativeSelect
+            value={form.memoryProvider}
+            onChange={(event) => field('memoryProvider', event.target.value)}
+          >
+            <NativeSelectOption value="openai">OpenAI</NativeSelectOption>
+            <NativeSelectOption value="mistral">Mistral</NativeSelectOption>
+            <NativeSelectOption value="custom">Personnalisé</NativeSelectOption>
+          </NativeSelect>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>Secours mémoire</span>
+          <NativeSelect
+            value={form.memoryFallback}
+            onChange={(event) => field('memoryFallback', event.target.value)}
+          >
+            <NativeSelectOption value="openai">OpenAI</NativeSelectOption>
+            <NativeSelectOption value="mistral">Mistral</NativeSelectOption>
+          </NativeSelect>
+        </label>
+        <label className="space-y-1 text-sm">
+          <span>Secours images</span>
+          <NativeSelect
+            value={form.imageFallback}
+            onChange={(event) => field('imageFallback', event.target.value)}
+          >
+            <NativeSelectOption value="openai">OpenAI</NativeSelectOption>
+            <NativeSelectOption value="local">Générateur local</NativeSelectOption>
+          </NativeSelect>
+        </label>
+      </div>
+      <Button
+        type="button"
+        onClick={() =>
+          void run('Fournisseur personnalisé enregistré.', async () => {
+            const saved = await api.saveCustomProvider(form);
+            setView(saved);
+            setForm(saved);
+          })
+        }
+      >
+        Enregistrer la configuration
+      </Button>
     </section>
   );
 }
@@ -280,6 +444,7 @@ export function Secrets({ run }: { run: RunAction }) {
                   run={run}
                   onChanged={setUpdated}
                 />
+                <CustomProviderForm run={run} />
                 <SecretGroup
                   icon={Boxes}
                   title="Modules"
