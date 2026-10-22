@@ -26,7 +26,7 @@ export function WebSearchSettings({
       id="module-web"
       icon={Globe}
       title="Web"
-      subtitle="Recherche sur le web par OpenAI, avec les sources sur la carte"
+      subtitle="Recherche sur le web par le fournisseur vocal choisi"
       badge={
         <Badge variant={enabled ? 'secondary' : 'outline'}>
           {enabled ? 'Activée' : 'Désactivée'}

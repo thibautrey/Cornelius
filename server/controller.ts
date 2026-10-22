@@ -1,3 +1,4 @@
+import type { VoiceProvider } from '../shared/voice-provider.js';
 import { DEFAULT_CARD_SETTINGS, type CardSettings } from '../shared/cards.js';
 import { DEFAULT_LIVE_VOICE, type LiveVoice } from '../shared/voices.js';
 import { openingFromSettings, settingsForOpening, type Opening } from '../shared/opening.js';
@@ -59,6 +60,8 @@ export interface SessionPreferencesStore {
   setAdvancedAudioBuffer?(enabled: boolean): void;
   getOrbScale?(): number;
   setOrbScale?(scale: number): void;
+  getVoiceProvider?(): VoiceProvider;
+  setVoiceProvider?(provider: VoiceProvider): void;
   getSpeechVoice?(): LiveVoice;
   setSpeechVoice?(voice: LiveVoice): void;
   getCardSettings?(): CardSettings;
@@ -151,8 +154,7 @@ export class SessionController {
    */
   setSetup(patch: Partial<MirrorSetup>): void {
     const next = { ...this.setup, ...patch };
-    if (next.openaiKey === this.setup.openaiKey && next.perception === this.setup.perception)
-      return;
+    if (JSON.stringify(next) === JSON.stringify(this.setup)) return;
     this.setup = next;
     this.publish();
   }
@@ -213,6 +215,7 @@ export class SessionController {
   private wakeWordEnabled = false;
   private advancedAudioBuffer = false;
   private orbScale = 100;
+  private voiceProvider: VoiceProvider = 'openai';
   private speechVoice: LiveVoice = DEFAULT_LIVE_VOICE;
   private cardSettings: CardSettings = { ...DEFAULT_CARD_SETTINGS };
   private admissionSound: AdmissionSound = { ...DEFAULT_ADMISSION_SOUND };
@@ -256,6 +259,7 @@ export class SessionController {
     if (this.session.mode === 4) preferences?.setWakeWordEnabled?.(true);
     this.advancedAudioBuffer = preferences?.getAdvancedAudioBuffer?.() ?? false;
     this.orbScale = preferences?.getOrbScale?.() ?? 100;
+    this.voiceProvider = preferences?.getVoiceProvider?.() ?? 'openai';
     this.speechVoice = preferences?.getSpeechVoice?.() ?? DEFAULT_LIVE_VOICE;
     this.cardSettings = preferences?.getCardSettings?.() ?? { ...DEFAULT_CARD_SETTINGS };
     this.admissionSound = { ...(preferences?.getAdmissionSound?.() ?? DEFAULT_ADMISSION_SOUND) };
@@ -388,6 +392,7 @@ export class SessionController {
       advancedAudioBuffer: this.advancedAudioBuffer,
       orbScale: this.orbScale,
       speechVoice: this.speechVoice,
+      voiceProvider: this.voiceProvider,
       cardSettings: { ...this.cardSettings },
       admissionSound: { ...this.admissionSound },
       delegationMode: this.delegationMode,
@@ -720,6 +725,15 @@ export class SessionController {
     }
     if (
       people.length === 0 ||
+      // Une identité confirmée reste attachée au même suivi pendant la durée configurée. Une
+      // image floue, un mouvement pendant l’accueil ou un profil de visage moins favorable ne
+      // doit pas couper la conversation. Une autre identité reconnue n’entre pas dans cette grâce.
+      (this.profile !== null &&
+        this.profileSeenAt !== null &&
+        now - this.profileSeenAt < this.timings.identityHoldMs &&
+        people.length === 1 &&
+        people[0]!.trackId === this.profileTrackId &&
+        people[0]!.profileId === null) ||
       // Le visage suivi a été perdu et un visage encore inconnu apparaît : la reconnaissance
       // a le délai de départ pour le confirmer avant que le profil soit retiré. Le même
       // suivi sans identité signifie au contraire une contradiction ou un maintien expiré.
@@ -950,6 +964,11 @@ export class SessionController {
   }
 
   /** Voix de la prochaine conversation : celle en cours garde la sienne (fixée à l’ouverture). */
+  setVoiceProvider(provider: VoiceProvider): void {
+    this.preferences?.setVoiceProvider?.(provider);
+    this.voiceProvider = provider;
+    this.publish();
+  }
   setSpeechVoice(voice: LiveVoice): void {
     if (this.speechVoice === voice) return;
     this.preferences?.setSpeechVoice?.(voice);
