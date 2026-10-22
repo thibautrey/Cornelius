@@ -228,14 +228,33 @@ test('search citations accept only explicit source URLs returned by the search t
 test('a rejected optional session update does not close the active voice connection', async () => {
   let emit!: (event: VoiceEvent) => void;
   let failures = 0;
-  const gateway = createVoiceGateway({ connect: async (_config, handler) => {
-    emit = handler;
-    return { audio() {}, result() {}, async update() { throw new Error('update rejected'); }, async close() {} };
-  } });
-  const live = gateway.connect!(liveConfiguration(), { open() {}, event() {}, failure() { failures++; } });
+  const gateway = createVoiceGateway({
+    connect: async (_config, handler) => {
+      emit = handler;
+      return {
+        audio() {},
+        result() {},
+        async update() {
+          throw new Error('update rejected');
+        },
+        async close() {},
+      };
+    },
+  });
+  const live = gateway.connect!(liveConfiguration(), {
+    open() {},
+    event() {},
+    failure() {
+      failures++;
+    },
+  });
   await tick();
   emit({ type: 'connected', id: 'active' });
-  live.send({ type: 'session.instructions.append', content: 'Accueil dynamique', delegation_id: null });
+  live.send({
+    type: 'session.instructions.append',
+    content: 'Accueil dynamique',
+    delegation_id: null,
+  });
   await tick();
   assert.equal(failures, 0);
   live.dispose();

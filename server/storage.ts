@@ -1,3 +1,4 @@
+import { customProviderMigration } from './custom-provider.js';
 import { isVoiceProvider, type VoiceProvider } from '../shared/voice-provider.js';
 import { ORB_SCALE_MAX, ORB_SCALE_MIN } from '../shared/display.js';
 import { DEFAULT_CARD_SETTINGS, type CardSettings } from '../shared/cards.js';
@@ -377,6 +378,23 @@ export const migrations: readonly string[] = [
     provider TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai', 'mistral'))
   ) STRICT;
   INSERT OR IGNORE INTO voice_provider_preferences (id) VALUES (1);`,
+  customProviderMigration,
+  `CREATE TABLE voice_provider_preferences_custom (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL DEFAULT 'openai' CHECK (provider IN ('openai', 'mistral', 'custom'))
+  ) STRICT;
+  INSERT INTO voice_provider_preferences_custom SELECT id, provider FROM voice_provider_preferences;
+  DROP TABLE voice_provider_preferences;
+  ALTER TABLE voice_provider_preferences_custom RENAME TO voice_provider_preferences;`,
+  `CREATE TABLE image_generation_provider_custom (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    provider TEXT NOT NULL DEFAULT 'local' CHECK (provider IN ('local', 'openai', 'custom')),
+    openai_model TEXT NOT NULL DEFAULT 'gpt-image-2.5-flare',
+    openai_quality TEXT NOT NULL DEFAULT 'low'
+  ) STRICT;
+  INSERT INTO image_generation_provider_custom SELECT * FROM image_generation_provider;
+  DROP TABLE image_generation_provider;
+  ALTER TABLE image_generation_provider_custom RENAME TO image_generation_provider;`,
 ];
 
 /** The server owns this connection. Backups include WAL changes via SQLite itself. */

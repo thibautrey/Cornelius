@@ -74,7 +74,7 @@ export interface ImageCard {
   title: string;
   prompt: string;
   imageUrl: string;
-  model: ImageGenerationModel | OpenAIImageModel;
+  model: ImageGenerationModel | OpenAIImageModel | string;
   width: number;
   height: number;
   primaryValue: null;
@@ -346,7 +346,7 @@ export const IMAGE_GENERATION_MODELS = [
 export type ImageGenerationModel = (typeof IMAGE_GENERATION_MODELS)[number];
 export const IMAGE_GENERATION_MODEL_DEFAULT: ImageGenerationModel = 'flux2-klein-4b';
 /** Où les images sont créées : sur ce PC, ou par l’API d’images d’OpenAI avec la même clé. */
-export const IMAGE_GENERATION_PROVIDERS = ['local', 'openai'] as const;
+export const IMAGE_GENERATION_PROVIDERS = ['local', 'openai', 'custom'] as const;
 export type ImageGenerationProvider = (typeof IMAGE_GENERATION_PROVIDERS)[number];
 export const OPENAI_IMAGE_MODELS = [
   'gpt-image-2.5-flare',
@@ -366,6 +366,7 @@ export interface ImageGenerationStatus {
   enabled: boolean;
   provider: ImageGenerationProvider;
   openaiModel: OpenAIImageModel;
+  customImageModel?: string;
   openaiQuality: OpenAIImageQuality;
   /** Raison pour laquelle OpenAI ne peut pas créer d’image (clé absente, connexions bloquées). */
   openaiUnavailable: string | null;

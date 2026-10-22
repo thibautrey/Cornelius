@@ -1,3 +1,10 @@
+import { validCustomProviderSettings } from '../shared/custom-provider.js';
+import {
+  CustomProviderRepository,
+  createCompatibleMemoryExtractor,
+  withMemoryFallback,
+} from './custom-provider.js';
+import { withGatewayFallback } from './live/fallback.js';
 import { isVoiceProvider } from '../shared/voice-provider.js';
 import { createMistralVoiceAdapter } from './voice/mistral.js';
 import { createVoiceGateway } from './voice/live-bridge.js';
@@ -173,6 +180,7 @@ export async function createApp(
     logs.write('error', 'local', 'Ouverture de SQLite impossible', { error });
     throw error;
   }
+  const customProvider = new CustomProviderRepository(db);
   const profiles = new ProfileRepository(db);
   const trustedDevices = new TrustedDevices(db, now);
   const adminPassword = new AdminPassword(db, config.adminPassword, DEFAULT_ADMIN_PASSWORD, now);
@@ -184,6 +192,7 @@ export async function createApp(
   // Clé OpenAI et jetons des modules : saisis dans l’administration, sinon lus dans .env.
   const envSecrets: Record<string, string | undefined> = {
     OPENAI_API_KEY: config.openaiKey,
+    CUSTOM_OPENAI_API_KEY: process.env.CUSTOM_OPENAI_API_KEY,
     CORNELIUS_METEO_CONCEPT_TOKEN: config.meteoConceptToken,
     CORNELIUS_PRIM_API_KEY: config.primApiKey,
   };
@@ -194,6 +203,7 @@ export async function createApp(
   );
   for (const value of secretStore.values()) logs.addSecret(value);
   const openaiKey = () => secretStore.get('OPENAI_API_KEY');
+  const customKey = () => secretStore.get('CUSTOM_OPENAI_API_KEY');
   const eraser = new PersonalDataEraser(db, config.databasePath, logs);
   const preferences = new SessionPreferences(db);
   normalizeOpening(preferences);
@@ -211,6 +221,7 @@ export async function createApp(
   const reservedSecrets = new Set([
     'OPENAI_API_KEY',
     'MISTRAL_API_KEY',
+    'CUSTOM_OPENAI_API_KEY',
     'CORNELIUS_ADMIN_PASSWORD',
     'CORNELIUS_PERCEPTION_TOKEN',
     'CORNELIUS_IMAGE_GENERATION_TOKEN',
@@ -264,32 +275,87 @@ export async function createApp(
   );
   const agents = new Agents(new AgentRepository(db, now), new HermesClient(http, now), now);
   const initialKey = openaiKey();
-  const selectedVoiceKey = () =>
+  const providerKey = (provider: 'openai' | 'mistral' | 'custom') =>
     secretStore.get(
-      preferences.getVoiceProvider() === 'mistral' ? 'MISTRAL_API_KEY' : 'OPENAI_API_KEY',
+      provider === 'mistral'
+        ? 'MISTRAL_API_KEY'
+        : provider === 'custom'
+          ? 'CUSTOM_OPENAI_API_KEY'
+          : 'OPENAI_API_KEY',
     );
-  const voiceGateway = () => {
-    const key = selectedVoiceKey();
+  const selectedVoiceKey = () => providerKey(preferences.getVoiceProvider());
+  const plainVoiceGateway = (provider: 'openai' | 'mistral') => {
+    const key = providerKey(provider);
     return !key
       ? null
-      : preferences.getVoiceProvider() === 'mistral'
+      : provider === 'mistral'
         ? createVoiceGateway(createMistralVoiceAdapter(key))
         : createLiveGateway(key, logs);
   };
-  const voiceMemoryExtractor = () => {
-    const key = selectedVoiceKey();
+  const voiceGateway = () => {
+    const provider = preferences.getVoiceProvider();
+    if (provider !== 'custom') return plainVoiceGateway(provider);
+    const key = customKey();
+    const settings = customProvider.get();
+    if (!key || !settings.baseUrl || !settings.voiceModel)
+      return plainVoiceGateway(settings.voiceFallback);
+    return withGatewayFallback(
+      createLiveGateway(key, logs, {
+        baseURL: settings.baseUrl,
+        model: settings.voiceModel,
+        provider: 'custom',
+      }),
+      plainVoiceGateway(settings.voiceFallback),
+    );
+  };
+  const plainMemoryExtractor = (provider: 'openai' | 'mistral') => {
+    const key = providerKey(provider);
     return !key
       ? null
-      : preferences.getVoiceProvider() === 'mistral'
+      : provider === 'mistral'
         ? createMistralMemoryExtractor(key)
         : createMemoryExtractor(key);
   };
+  const voiceMemoryExtractor = () => {
+    const settings = customProvider.get();
+    if (settings.memoryProvider !== 'custom') return plainMemoryExtractor(settings.memoryProvider);
+    const key = customKey();
+    if (!key || !settings.baseUrl || !settings.memoryModel)
+      return plainMemoryExtractor(settings.memoryFallback);
+    return withMemoryFallback(
+      createCompatibleMemoryExtractor(key, settings.baseUrl, settings.memoryModel),
+      plainMemoryExtractor(settings.memoryFallback),
+    );
+  };
   const makeImageCreator = options.openaiImageCreator ?? createOpenAIImageCreator;
   let openaiImageCreator = initialKey ? makeImageCreator(initialKey) : null;
+  let customImageCreator: OpenAIImageCreator | null = null;
+  const refreshCustomImageCreator = () => {
+    const settings = customProvider.get();
+    const key = customKey();
+    if (!key || !settings.baseUrl || !settings.imageModel) customImageCreator = null;
+    else {
+      const primary = createOpenAIImageCreator(key, undefined, settings.baseUrl);
+      customImageCreator = async (request) => {
+        try {
+          return await primary({ ...request, model: settings.imageModel });
+        } catch (error) {
+          if (settings.imageFallback === 'openai' && openaiImageCreator)
+            return openaiImageCreator(request);
+          throw error;
+        }
+      };
+    }
+    imageGeneration.useCustom(
+      { creator: () => customImageCreator, blocked: () => false },
+      settings.imageModel,
+    );
+  };
   imageGeneration.useOpenAI({
     creator: () => openaiImageCreator,
     blocked: () => preferences.getOpenAIBlocked(),
   });
+  refreshCustomImageCreator();
   const live = new LiveTransport(
     voiceGateway(),
     () => preferences.getOpenAIBlocked(),
@@ -349,9 +415,14 @@ export async function createApp(
       openaiImageCreator = value ? makeImageCreator(value) : null;
       controller.setSetup({ openaiKey: !!value });
     }
-    if (name === 'OPENAI_API_KEY' || name === 'MISTRAL_API_KEY') {
+    if (
+      name === 'OPENAI_API_KEY' ||
+      name === 'MISTRAL_API_KEY' ||
+      name === 'CUSTOM_OPENAI_API_KEY'
+    ) {
       live.setGateway(voiceGateway());
       if (!options.memoryExtractor) memory.setExtractor(voiceMemoryExtractor());
+      refreshCustomImageCreator();
       controller.setSetup({
         mistralKey: !!secretStore.get('MISTRAL_API_KEY'),
         voiceKey: !!selectedVoiceKey(),
@@ -953,6 +1024,13 @@ export async function createApp(
         url: 'https://console.mistral.ai/api-keys',
         note: 'Accès Voice Agents nécessaire',
       },
+      {
+        ...describe('CUSTOM_OPENAI_API_KEY'),
+        label: customProvider.get().name,
+        usedBy: 'API compatible OpenAI personnalisée',
+        url: null,
+        note: 'Voix, mémoire et images selon les modèles choisis',
+      },
       ...[
         ...new Map([...addonSecrets.values()].map((secret) => [secret.env, secret])).values(),
       ].map((secret) => ({
@@ -964,6 +1042,36 @@ export async function createApp(
       })),
     ];
   }
+  const refreshCustomProvider = () => {
+    live.setGateway(voiceGateway());
+    if (!options.memoryExtractor) memory.setExtractor(voiceMemoryExtractor());
+    refreshCustomImageCreator();
+    broadcast({ schemaVersion: 1, type: 'devices', status: devices() }, true);
+  };
+  app.get('/api/admin/custom-provider', { preHandler: requireAdmin }, async () =>
+    customProvider.view(!!customKey()),
+  );
+  app.patch('/api/admin/custom-provider', { preHandler: requireAdmin }, async (request, reply) => {
+    if (!validCustomProviderSettings(request.body))
+      return reply.code(400).send({ error: 'Configuration du fournisseur invalide.' });
+    customProvider.set(request.body);
+    refreshCustomProvider();
+    return customProvider.view(!!customKey());
+  });
+  app.post(
+    '/api/admin/custom-provider/models',
+    { preHandler: requireAdmin },
+    async (_request, reply) => {
+      const key = customKey();
+      if (!key) return reply.code(400).send({ error: 'Ajoutez d’abord la clé personnalisée.' });
+      try {
+        await customProvider.discover(key);
+        return customProvider.view(true);
+      } catch {
+        return reply.code(502).send({ error: 'Impossible de lire les modèles du fournisseur.' });
+      }
+    },
+  );
   const knownSecret = (env: string) => secretViews().some((secret) => secret.env === env);
   app.get('/api/admin/secrets', { preHandler: requireAdmin }, async () => ({
     secrets: secretViews(),
@@ -1296,7 +1404,7 @@ export async function createApp(
         return reply
           .code(409)
           .send({ error: 'Terminez la conversation avant de changer de fournisseur.' });
-      if (!secretStore.get(provider === 'mistral' ? 'MISTRAL_API_KEY' : 'OPENAI_API_KEY'))
+      if (!providerKey(provider))
         return reply.code(400).send({
           error: 'Ajoutez d’abord la clé de ce fournisseur dans Mise en route → Clés et jetons.',
         });

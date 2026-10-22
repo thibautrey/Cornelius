@@ -14,8 +14,20 @@ test('un jeton de module se saisit dans Mise en route, compte aussitôt et s’e
   await login(page);
   const card = page.locator('#secrets');
   await expect(card.getByRole('heading', { name: 'Clés et jetons' })).toBeVisible();
-  await expect(card.getByRole('heading', { name: 'Clé OpenAI' })).toBeVisible();
-  const field = card.getByLabel('Jeton Météo Concept', { exact: true });
+  const providers = card.getByRole('region', { name: 'Fournisseurs IA' });
+  const modules = card.getByRole('region', { name: 'Modules' });
+  await expect(providers.getByRole('heading', { name: 'Clé OpenAI' })).toBeVisible();
+  await expect(providers.getByRole('heading', { name: 'Clé Mistral' })).toBeVisible();
+  await expect(providers.getByRole('heading', { name: 'Fournisseur personnalisé' })).toBeVisible();
+  const providerScroller = providers.locator('.overflow-x-auto');
+  await expect(providerScroller).toHaveCSS('overflow-x', 'auto');
+  expect(
+    await providerScroller.evaluate((element) => element.scrollWidth > element.clientWidth),
+  ).toBe(true);
+  await expect(
+    card.getByRole('heading', { name: 'Configuration du fournisseur personnalisé' }),
+  ).toBeVisible();
+  const field = modules.getByLabel('Jeton Météo Concept', { exact: true });
   await field.fill('meteo-e2e-token-0123456789wxyz');
   try {
     await field

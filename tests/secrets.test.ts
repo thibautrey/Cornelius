@@ -49,6 +49,45 @@ test('valeurs de clé acceptées', () => {
   assert.ok(secretValueError(42));
 });
 
+test('le fournisseur compatible se configure sans jamais renvoyer sa clé', async (t) => {
+  const f = await fixture(t);
+  const key = 'custom-provider-secret-0123456789';
+  const savedKey = await f.app.inject({
+    method: 'PUT',
+    url: '/api/admin/secrets/CUSTOM_OPENAI_API_KEY',
+    headers: f.headers,
+    payload: { value: key },
+  });
+  assert.equal(savedKey.statusCode, 200, savedKey.body);
+  assert.equal(savedKey.body.includes(key), false);
+
+  const settings = {
+    name: 'Serveur maison',
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    voiceModel: 'realtime-model',
+    memoryModel: 'memory-model',
+    imageModel: 'image-model',
+    voiceFallback: 'mistral',
+    memoryProvider: 'custom',
+    memoryFallback: 'openai',
+    imageFallback: 'openai',
+  };
+  const saved = await f.app.inject({
+    method: 'PATCH',
+    url: '/api/admin/custom-provider',
+    headers: f.headers,
+    payload: settings,
+  });
+  assert.equal(saved.statusCode, 200, saved.body);
+  assert.equal(saved.json().name, 'Serveur maison');
+  assert.equal(saved.json().keyConfigured, true);
+  assert.deepEqual(saved.json().ready, { voice: true, memory: true, image: true });
+  assert.equal(saved.body.includes(key), false);
+
+  const unauthenticated = await f.app.inject({ url: '/api/admin/custom-provider' });
+  assert.equal(unauthenticated.statusCode, 401);
+});
+
 test('la clé OpenAI se saisit dans l’administration et compte sans redémarrage', async (t) => {
   const f = await fixture(t);
   const list = await f.app.inject({ url: '/api/admin/secrets', headers: f.headers });

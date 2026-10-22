@@ -5,6 +5,7 @@ import {
   Cpu,
   Download,
   RefreshCw,
+  Server,
   TriangleAlert,
   WandSparkles,
 } from 'lucide-react';
@@ -123,6 +124,12 @@ const providers: {
     name: 'Avec OpenAI',
     summary: 'Rien à installer, utilise la clé OpenAI de Cornelius. Chaque image est facturée.',
     icon: Cloud,
+  },
+  {
+    id: 'custom',
+    name: 'Fournisseur personnalisé',
+    summary: 'Utilise l’URL, la clé et le modèle configurés dans Clés et jetons.',
+    icon: Server,
   },
 ];
 
@@ -345,8 +352,9 @@ export function ImageGenerationSettings({
     });
   const provider = generation?.provider ?? 'local';
   const openai = provider === 'openai';
-  // Avec OpenAI, rien à installer : seuls la clé et l’activation comptent.
-  const ready = openai || currentInstalled;
+  const custom = provider === 'custom';
+  // Avec un fournisseur distant, rien à installer : la clé et le modèle suffisent.
+  const ready = openai || custom ? !generation?.openaiUnavailable : currentInstalled;
   const enabledSwitch = (
     <div className="flex items-center justify-between gap-4">
       <div className="space-y-1">
@@ -407,11 +415,13 @@ export function ImageGenerationSettings({
           ? 'OpenAI · ' +
             openaiModelOptions[generation.openaiModel ?? OPENAI_IMAGE_MODEL_DEFAULT].name +
             (generation.openaiUnavailable ? ' · clé à vérifier' : '')
-          : generation
-            ? 'Modèle ' +
-              optionOf(current).tier.toLocaleLowerCase('fr') +
-              (currentInstalled ? '' : ' · à installer')
-            : 'Images créées sur ce PC'
+          : generation && custom
+            ? 'Personnalisé · ' + (generation.customImageModel || 'modèle à choisir')
+            : generation
+              ? 'Modèle ' +
+                optionOf(current).tier.toLocaleLowerCase('fr') +
+                (currentInstalled ? '' : ' · à installer')
+              : 'Images créées sur ce PC'
       }
       badge={
         <Badge variant={generation?.enabled ? 'secondary' : 'outline'}>
@@ -424,7 +434,9 @@ export function ImageGenerationSettings({
       <p className="text-sm text-muted-foreground">
         {openai
           ? 'Créer une image à la voix : Cornelius envoie votre description à OpenAI, qui crée une image carrée affichée ensuite sur le miroir. Chaque image est facturée sur votre compte OpenAI.'
-          : 'Créer une image à la voix : Cornelius dessine sur ce PC une image carrée à partir de votre description, puis l’affiche sur le miroir. La description et l’image ne sont envoyées à aucun service d’image en ligne.'}
+          : custom
+            ? 'Cornelius confie la création au fournisseur OpenAI-compatible configuré dans Clés et jetons.'
+            : 'Créer une image à la voix : Cornelius dessine sur ce PC une image carrée à partir de votre description, puis l’affiche sur le miroir. La description et l’image ne sont envoyées à aucun service d’image en ligne.'}
       </p>
       <ProviderChoice
         value={provider}
@@ -433,7 +445,9 @@ export function ImageGenerationSettings({
           void run(
             next === 'openai'
               ? 'Les images seront créées par OpenAI.'
-              : 'Les images seront créées sur ce PC.',
+              : next === 'custom'
+                ? 'Les images seront créées par le fournisseur personnalisé.'
+                : 'Les images seront créées sur ce PC.',
             () => api.imageGeneration({ provider: next }),
             { key: 'image-generation-provider', payload: { provider: next } },
           )
@@ -450,6 +464,25 @@ export function ImageGenerationSettings({
             </>
           }
         />
+      ) : custom && generation ? (
+        <SetupSteps label="Mise en place de la génération d’image">
+          <SetupStep
+            number={1}
+            title="Configurer le fournisseur personnalisé"
+            done={!generation.openaiUnavailable}
+          >
+            <p className="text-sm text-muted-foreground">
+              Renseignez l’URL, la clé et le modèle d’image dans Mise en route → Clés et jetons.
+              {generation.openaiUnavailable ? ` ${generation.openaiUnavailable}` : ''}
+            </p>
+          </SetupStep>
+          <SetupStep number={2} title="Activer" done={generation.enabled}>
+            <div className="space-y-4">
+              {enabledSwitch}
+              {illustrateSwitch}
+            </div>
+          </SetupStep>
+        </SetupSteps>
       ) : (
         <SetupSteps label="Mise en place de la génération d’image">
           <SetupStep number={1} title="Choisir le modèle" done={currentInstalled && !choice}>
